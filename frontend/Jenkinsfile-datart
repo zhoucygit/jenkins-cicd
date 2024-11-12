@@ -1,0 +1,155 @@
+//datart前端打包一直打不成包。所以需要先将datart包给上传到jenkins服务器的/home/admin/.jenkins/workspace/smart_datart_web/build/目录下，并改名为build。然后再jenkins上构建部署。打镜像以及部署到k8s上
+def createVersion() {
+    // 定义一个版本号作为当次构建的版本,输出结果为jenkins-版本号-日期-buildid
+    return "jenkins" + "-${branch_of_tag_name}-" + new  Date().format('yyyyMMddHHmm') + "-${env.BUILD_ID}"
+}
+
+pipeline {
+    agent any
+    environment {
+        version = createVersion()
+    }
+    
+    stages {
+        //stage('Code Checkout') {
+            // 拉取代码
+        //    when {
+        //        expression { params.deploy_mode ==~ /(Release|BuildImage)/ }
+        //    }
+        //    steps {
+        //        script {
+        //            dir('build') {
+        //                // 清理当前工作目录
+        //                sh "rm -rf ./*"
+        //                if (params.checkout_type == "branch") {
+        //                    git branch: '$branch_of_tag_name', credentialsId: 'mlw', url: '$git_url'} else {git url: '$git_url', credentialsId: 'mlw'
+        //                    sh "git checkout $branch_of_tag_name"
+        //                }
+        //            }
+        //        }
+        //    }
+        //}
+        
+        //stage('npm Build') {
+            // 代码maven构建
+        //    when {
+        //        expression { params.deploy_mode ==~ /(Release|BuildImage)/ }
+        //    }
+        //    steps {
+        //        dir('build'){
+        //            sh """
+        //            if [ $app_name == "smart-datart-web" ];then
+        //                npm install --force && export CI=false
+        //               npm run build
+        //            else
+        //                npm install --legacy-peer-deps
+        //                unzip -o @yq-group.zip
+        //                rm -rf node_modules/@yq-group
+        //                mv -f @yq-group node_modules/
+        //                npm run build
+        //            fi
+        //            """
+        //        }
+        //    }
+        //}
+        
+        stage('Docker Image Build') {
+            // docker镜像打包
+            when {
+                expression { params.deploy_mode ==~ /(Release|BuildImage)/ }
+            }
+            steps {
+                script {
+                    dir('docker_build') {
+                        // 清理当前工作目录
+                        sh "rm -rf ./*"
+                        // 拉取Dockerfile模板
+                        git branch: 'master', credentialsId: 'mlw', url:'$k8s_templates_git_url'
+                        sh "cp ./frontend/Dockerfile ./"
+                        // 取npm Build构建出来的包,放到当前目录进行docker image构建
+                        sh """
+                        if [ $app_name == "smart-datart-web" ];then
+                            cp -r ../build/build ./datart
+                            chmod 755 -R ./datart
+                        else
+                            cp -r ../build/output/release/smartdata/$target_file ./
+                            chmod 755 -R ./$target_file
+                        fi
+                        """
+                        // 打包镜像
+                        docker.withRegistry("http://${harbor_url}", 'harbor') {
+                        def dockerfile = 'Dockerfile'
+                        def customImage = docker.build("smartdata-dev/${environment}/${app_name}:${version}", "--build-arg target_file=${target_file} ./")
+                        customImage.push()
+                        }
+                        /// 镜像上传到镜像仓库后进行本地删除
+                        sh """
+                        docker rmi ${harbor_url}/smartdata-dev/${environment}/${app_name}:${version}
+                        """
+                        }
+                    }
+                }
+            }
+            
+            stage('k8s deployment') {
+                // 部署到k8s
+                when {
+                    expression { params.deploy_mode ==~ /(Release|Resource)/ }
+                }
+                steps {
+                    dir('k8s_deploy'){
+                        // 拉取Dockerfile模板
+                        git branch: 'master', credentialsId: 'mlw', url:'$k8s_templates_git_url'
+                        // 没有则创建configmap
+                        sh """
+                        cp frontend/$config_file ./nginx.conf
+                        kubectl get configmap $app_name-config -n $environment || kubectl  create configmap $app_name-config --from-file=nginx.conf -n $environment
+                        """
+                        // 部署deployment
+                        sh """
+                        cp frontend/deployment.tpl ./deployment.yml
+                        if [ $deploy_mode == "Resource" ];then
+                	        current_image_version=`kubectl get deployment $app_name '-o=jsonpath={\$.spec.template.spec.containers[:1].image}' -n $environment 2>/dev/null || echo "null"`
+                            sed -i "s#{image_url}#\$current_image_version#g" deployment.yml
+                        else
+                            sed -i 's#{image_url}#$harbor_url/smartdata-dev/${environment}/$app_name:$version#g' deployment.yml
+                        fi
+                        sed -i 's#{namespace}#$environment#g' deployment.yml
+                        sed -i 's#{image_url}#$harbor_url/smartdata/${environment}/$app_name:$version#g' deployment.yml
+                        sed -i 's#{app_name}#$app_name#g' deployment.yml
+                        sed -i 's#{config_file}#nginx.conf#g' deployment.yml
+                        sed -i 's#{replicas}#$replicas#g' deployment.yml
+                        sed -i 's#{cpu_limit}#$cpu_limit#g' deployment.yml
+                        sed -i 's#{memory_limit}#$memory_limit#g' deployment.yml
+                        kubectl apply -f deployment.yml
+                        """
+                        // 没有则创建service
+                        sh """
+                        cp frontend/service.tpl ./service.yml
+                        sed -i 's#{namespace}#$environment#g' service.yml
+                        sed -i 's#{app_name}#$app_name#g' service.yml
+                        kubectl get service $app_name -n $environment || kubectl apply -f service.yml
+                        """
+                    }
+                }
+            }   
+        }
+    post {
+		success {
+            script {
+                currentBuild.description = "执行操作:${params.deploy_mode} 代码分支: ${params.branch_of_tag_name}"
+				
+            }
+        }
+        failure {
+            script {
+                currentBuild.description = "执行操作:${params.deploy_mode} 代码分支: ${params.branch_of_tag_name}"
+            }
+		}
+        aborted {           
+            script {
+                currentBuild.description = "执行操作:${params.deploy_mode} 代码分支: ${params.branch_of_tag_name}"
+            }
+        }
+    }
+}

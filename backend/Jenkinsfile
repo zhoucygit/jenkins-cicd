@@ -1,0 +1,144 @@
+def createVersion() {
+    // 定义一个版本号作为当次构建的版本,输出结果为jenkins-分支-日期-buildid
+    return "jenkins" + "-${branch_of_tag_name}-" + new  Date().format('yyyyMMddHHmm') + "-${env.BUILD_ID}"
+}
+
+pipeline {
+
+    agent any
+    
+    environment {
+        version = createVersion()
+    }
+
+    stages {
+        stage('Code Checkout') {
+            // 拉取代码
+            when {
+            // 部署模式为Release(发版)时才执行该步骤
+            expression { params.deploy_mode ==~ /(Release|BuildImage)/ }
+            }
+            steps {
+                script {
+                    dir('build') {
+                        // 清理当前工作目录
+                        sh "rm -rf ./*"
+                        if (params.checkout_type == "branch") {
+                            git branch: '$branch_of_tag_name', credentialsId: 'mlw', url: '$git_url'} else {
+                            git url: '$git_url', credentialsId: 'mlw'
+                            sh "git checkout $branch_of_tag_name"
+                            }
+                        }
+                    }
+                }
+            }
+        
+        stage('Maven Build') {
+            // 代码maven构建
+            when {
+                // 部署模式为Release(发版)时才执行该步骤
+                expression { params.deploy_mode ==~ /(Release|BuildImage)/ }
+            }
+            steps {
+                dir('build') {
+                    sh """
+                    mvn clean install -Dfile.encoding=UTF-8 -DskipTests=true
+                    """
+                }
+            }
+        }
+        
+        stage('Docker Image Build') {
+            // docker镜像打包
+            when {
+                // 部署模式为Release(发版)时才执行该步骤
+                expression { params.deploy_mode ==~ /(Release|BuildImage)/ }
+            }
+            steps {
+                script {
+                    dir('docker_build') {
+                        // 清理当前工作目录
+                        sh "rm -rf ./*"
+                        // 拉取Dockerfile模板
+                        git branch: 'master', credentialsId: 'mlw', url: '$k8s_templates_git_url'
+                        sh "cp ./backend/Dockerfile ./"
+                        // 取Maven Build构建出来的包,放到当前目录进行docker image构建
+                        sh """
+                        if [ -d ../build/$module_name ];then
+                        cp ../build/$module_name/target/$target_file ./
+                        else
+                        cp ../build/target/$target_file ./
+                        fi
+                        """
+                        docker.withRegistry("http://${harbor_url}", "harbor") {
+                            def dockerfile = 'Dockerfile'
+                            def customImage = docker.build("smartdata-dev/${environment}/${app_name}:${version}", "--build-arg app_name=${app_name} --build-arg jar_file=${target_file} ./")
+                            customImage.push()
+                        }
+                        // 镜像上传到镜像仓库后进行本地删除
+                        sh """
+                        docker rmi ${harbor_url}/smartdata-dev/${environment}/${app_name}:${version}
+                        """
+                    }
+                }
+            }
+        }
+        stage('k8s deploy') {
+            // 部署到k8s
+            when {
+                // 部署模式为Release(发版)时才执行该步骤
+                expression { params.deploy_mode ==~ /(Release|Resource)/ }
+            }
+            steps {
+                dir('k8s_deploy') {
+                    // 拉取Dockerfile模板
+                    git branch: 'master', credentialsId: 'mlw', url: '$k8s_templates_git_url'
+                    sh """
+                    cp ../build/$config_file ./$config_file
+                    kubectl get configmap $app_name-config -n $environment || kubectl  create configmap $app_name-config --from-file=./$config_file -n $environment
+                    cp backend/deployment.tpl ./deployment.yml
+                    if [ $deploy_mode == "Resource" ];then
+                	    current_image_version=`kubectl get deployment $app_name '-o=jsonpath={\$.spec.template.spec.containers[:1].image}' -n $environment 2>/dev/null || echo "null"`
+                        sed -i "s#{image_url}#\$current_image_version#g" deployment.yml
+                    else
+                        sed -i 's#{image_url}#$harbor_url/smartdata-dev/${environment}/$app_name:$version#g' deployment.yml
+                    fi
+                    sed -i 's#{namespace}#$environment#g' deployment.yml
+                    sed -i 's#{app_name}#$app_name#g' deployment.yml
+                    sed -i 's#{replicas}#$replicas#g' deployment.yml
+                    sed -i 's#{java_opts}#$java_opts#g' deployment.yml
+                    sed -i 's#{cpu_limit}#$cpu_limit#g' deployment.yml
+                    sed -i 's#{memory_limit}#$memory_limit#g' deployment.yml
+                    sed -i 's#{config_file}#$config_file#g' deployment.yml
+                    kubectl apply -f deployment.yml
+                    """
+                    // 没有则创建service
+                    sh """
+                    cp backend/service.tpl ./service.yml
+                    sed -i 's#{namespace}#$environment#g' service.yml
+                    sed -i 's#{app_name}#$app_name#g' service.yml
+                    kubectl get service $app_name -n $environment || kubectl apply -f service.yml
+                    """
+                }
+            }
+        }
+    }
+	post {
+		success {
+            script {
+                currentBuild.description = "执行操作:${params.deploy_mode} 代码分支: ${params.branch_of_tag_name}"
+				
+            }
+        }
+        failure {
+            script {
+                currentBuild.description = "执行操作:${params.deploy_mode} 代码分支: ${params.branch_of_tag_name}"
+            }
+		}
+        aborted {           
+            script {
+                currentBuild.description = "执行操作:${params.deploy_mode} 代码分支: ${params.branch_of_tag_name}"
+            }
+        }
+    }
+}

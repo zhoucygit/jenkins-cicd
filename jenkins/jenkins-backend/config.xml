@@ -1,0 +1,175 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@1316.vd2290d3341a_f">
+  <actions/>
+  <description>1. 在nacos上 创建name_space同名的命名空间，并创建好配置文件&#xd;
+2. 在harbor上创建name_space同名的项目用来保存镜像</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>name_space</name>
+          <description>应用组名称</description>
+          <defaultValue>NAME_SPACE_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>nacos_addr</name>
+          <description>nacos地址</description>
+          <defaultValue>NACOS_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>nacos_port</name>
+          <description>nacos端口 </description>
+          <defaultValue>NACOS_PORT_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>nacos_user</name>
+          <description>nacos用户</description>
+          <defaultValue>NACOS_USER_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>nacos_passwd</name>
+          <description>nacos 密码</description>
+          <defaultValue>NACOS_PASSWD_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>harbor</name>
+          <description>仓库地址</description>
+          <defaultValue>HARBOR_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>harbor_name_space</name>
+          <description>harbor命名空间</description>
+          <defaultValue>HARBOR_NAMESPACE_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>replicas</name>
+          <description>实例数</description>
+          <defaultValue>REPLICAS_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>version</name>
+          <description>分支版本</description>
+          <defaultValue>APPBRANCH_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>app_port</name>
+          <description>端口</description>
+          <defaultValue>APP_PORT_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>build_path</name>
+          <description>构建路径</description>
+          <defaultValue>BUILD_PATH_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <name>release</name>
+          <description>本次是否打包发布到本地目录 /data/release 下（不会发布到环境）：
+前端: /data/release/portal
+后端: /data/release/service</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>limits_memory</name>
+          <description>内存资源限制</description>
+          <defaultValue>LIMITS_MEMORY_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>limits_cpu</name>
+          <description>CPU资源限制</description>
+          <defaultValue>LIMITS_CPU_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>app_name</name>
+          <description>应用名称</description>
+          <defaultValue>APP_NAME_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>jvm_heap</name>
+          <defaultValue>JVM_JEAP_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@3731.ve4b_5b_857b_a_d3">
+    <script>node(){
+
+    stage(&apos;checkout&apos;){
+  
+        dir(&apos;APP_NAME_IN_JENKINS&apos;){
+             git version_type: &apos;${version}&apos;, credentialsId: &apos;swz&apos;, url: &apos;APPGITURL_IN_JENJINS&apos;
+        }
+        dir(&apos;k8s-deploy-config&apos;){
+            git branch: &apos;K8SGITBRANCH_IN_JENKINS&apos;, credentialsId: &apos;swz&apos;, url: &apos;K8SGITURL_IN_JENJINS&apos;
+        }
+    }
+    
+    stage(&apos;Maven Build&apos;)
+    def timestamp = new Date().format(&apos;yyyyMMddHHmmss&apos;)
+    def IMG=&quot;${harbor}/${harbor_name_space}/$app_name:$version.${timestamp}&quot;
+      sh&quot;&quot;&quot;
+
+         #### 以下为通用配置 ####
+      
+        cd $workspace/$app_name
+        #git checkout tags/${version}
+        mvn clean install
+        
+        if [ $release = true ]; then 
+            cp -r $build_path /data/release/service/${app_name}-${version}.${BUILD_ID}.jar
+            echo &quot;应用已发布到/data/release/service/${app_name}-${version}.${BUILD_ID}.jar&quot;
+            exit 0;  
+        fi
+        
+        #cp -r ./docker/Dockerfile Dockerfile
+        cp -r $workspace/k8s-deploy-config/onecode/service/* ./
+
+        # replace dockerfile template
+        sed -i &quot;s/name_space/$name_space/g;s|build_path|$build_path|g;s/app_name/$app_name/g;s#2g#${jvm_heap}#g&quot; Dockerfile
+        # replace k8s template
+        sed -i &quot;s/name_space/$name_space/g;s|image_name|${IMG}|g;s/app_name/${app_name}/g;s/app_port/$app_port/g;s/limits_cpu/$limits_cpu/g;s/limits_memory/$limits_memory/g&quot; deployment-tpl.yml
+        sed -i &apos;s/nacos_ip/${nacos_addr}/g;s/replicas: 1/replicas: ${replicas}/g&apos; deployment-tpl.yml
+        sed -i &quot;s#nacos_user#${nacos_user}#g;s#nacos_passwd#${nacos_passwd}#g;s#8848#${nacos_port}#g;s#2g#${jvm_heap}#g&quot;  deployment-tpl.yml
+        # build image
+        echo &quot;构建镜像...${IMG}&quot;
+        docker build -t ${IMG} ./
+        #docker push ${IMG}
+        docker login http://$harbor -u HARBORUSER_IN_JENKINS -p &quot;HARBORPASS_IN_JENKINS&quot;
+        docker push &quot;${IMG}&quot;
+        docker rmi ${IMG}
+        
+        cat deployment-tpl.yml
+        #sshpass -p &apos;BfdPKzC6RwfJ&apos; scp -o stricthostkeychecking=no  deployment-tpl.yml root@192.168.10.241:/tmp/${app_name}.yml
+      
+      &quot;&quot;&quot; 
+        
+      stage(&apos;deploy&apos;)
+        sh&quot;&quot;&quot;      
+          if [ $release = true ]; then 
+             exit 0;  
+          fi
+          #sshpass -p &apos;BfdPKzC6RwfJ&apos; ssh -o stricthostkeychecking=no  root@192.168.10.241 &quot;kubectl apply -f /tmp/${app_name}.yml  &quot;
+          cd $workspace/$app_name
+          kubectl --kubeconfig=KUBE_CONFIG_JENKINS apply -f deployment-tpl.yml
+        &quot;&quot;&quot; 
+}</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

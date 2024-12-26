@@ -1,0 +1,118 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@1316.vd2290d3341a_f">
+  <actions/>
+  <description>业务管理页面</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>name_space</name>
+          <defaultValue>NAME_SPACE_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>app_name</name>
+          <description>应用名称</description>
+          <defaultValue>APP_NAME_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>version</name>
+          <description>分支版本</description>
+          <defaultValue>APPBRANCH_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>harbor</name>
+          <description>镜像仓库</description>
+          <defaultValue>HARBOR_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>harbor_name_space</name>
+          <description>harbor命名空间</description>
+          <defaultValue>HARBOR_NAMESPACE_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <name>release</name>
+          <description>本次是否打包发布到本地目录 /data/release 下（不会发布到环境）：
+前端: /data/release/portal
+后端: /data/release/service</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>replicas</name>
+          <description>实例数</description>
+          <defaultValue>REPLICAS_IN_JENKINS</defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@3731.ve4b_5b_857b_a_d3">
+    <script>node(){
+
+    stage(&apos;checkout&apos;){
+        dir(&apos;APP_NAME_IN_JENKINS&apos;){
+            git version_type: &apos;${version}&apos;, credentialsId: &apos;swz&apos;, url: &apos;APPGITURL_IN_JENJINS&apos;
+        }
+        dir(&apos;k8s-deploy-config&apos;){
+            git branch: &apos;K8SGITBRANCH_IN_JENKINS&apos;, credentialsId: &apos;swz&apos;, url: &apos;K8SGITURL_IN_JENJINS&apos;
+        }
+    }
+    
+    stage(&apos;Npm Build&apos;)
+    def timestamp = new Date().format(&apos;yyyyMMddHHmmss&apos;)
+    def IMG=&quot;${harbor}/${harbor_name_space}/${app_name}:$version.${timestamp}&quot;
+        sh&quot;&quot;&quot;
+        
+        cd $workspace/$app_name
+        #git checkout tags/${version}
+        npm install
+        npm run build
+        
+        if [ $release = true ]; then 
+            cp -r dist /data/release/portal/${app_name}_$version.$BUILD_ID
+            echo &quot;应用已发布到/data/release/portal/${app_name}_${version}.${BUILD_ID}&quot;
+            exit 0;  
+        fi
+        
+        
+        
+        cp $workspace/k8s-deploy-config/onecode/portal/* ./
+         sed -i &apos;s/portal/${app_name}/g&apos; Dockerfile
+        #docker build -t $name_space/$app_name:$version ./
+        docker build -t ${IMG} ./
+        
+        echo &quot;构建镜像...${IMG}&quot;
+        #docker tag $name_space/$app_name:$version ${IMG}
+        docker login http://$harbor -u HARBORUSER_IN_JENKINS -p &quot;HARBORPASS_IN_JENKINS&quot;
+        docker push ${IMG}
+        docker rmi ${IMG}
+        
+        # 替换模板
+        sed -i &quot;s/name_space/$name_space/g;s|app_name|${app_name}|g;s|image_name|${IMG}|g&quot; deployment-tpl.yml
+        sed -i &apos;s/replicas: 1/replicas: ${replicas}/g&apos; deployment-tpl.yml
+        
+        #sshpass -p &apos;BfdPKzC6RwfJ&apos; scp -o stricthostkeychecking=no  deployment-tpl.yml root@192.168.10.241:/tmp/${app_name}.yml
+        &quot;&quot;&quot; 
+    stage &apos;deploy&apos;
+        
+        sh&quot;&quot;&quot;  
+          if [ $release = true ]; then 
+            exit 0;  
+          fi
+          #sshpass -p &apos;BfdPKzC6RwfJ&apos; ssh -o stricthostkeychecking=no  root@192.168.10.241 &quot;kubectl apply -f /tmp/${app_name}.yml  &quot;
+          cd $workspace/$app_name
+          kubectl --kubeconfig=KUBE_CONFIG_JENKINS apply -f deployment-tpl.yml
+        &quot;&quot;&quot;
+}
+
+</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

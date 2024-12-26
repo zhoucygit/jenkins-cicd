@@ -1,0 +1,32 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@1316.vd2290d3341a_f">
+  <actions/>
+  <description></description>
+  <keepDependencies>false</keepDependencies>
+  <properties/>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@3731.ve4b_5b_857b_a_d3">
+    <script>node () {
+def workspace = pwd()
+ stage &apos;checkout&apos;
+ git version_type: &apos;APPBRANCH_IN_JENKINS&apos;, credentialsId: &apos;swz&apos;, url: &apos;APPGITURL_IN_JENJINS&apos;
+    
+
+stage &apos;Build&apos;
+   
+    sh&quot;&quot;&quot;
+    
+        cd $workspace
+        #git checkout tags/APPBRANCH_IN_JENKINS
+        
+        mvn clean install -U
+        
+        &quot;&quot;&quot;
+
+
+ 
+ }</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>
